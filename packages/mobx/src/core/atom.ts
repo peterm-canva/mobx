@@ -62,18 +62,22 @@ export class Atom implements IAtom {
     }
 
     // onBecomeObservedListeners
-    public onBOL: Set<Lambda> | undefined
+    public onBOL: Lambda | Set<Lambda> | undefined
     // onBecomeUnobservedListeners
-    public onBUOL: Set<Lambda> | undefined
+    public onBUOL: Lambda | Set<Lambda> | undefined
 
     public onBO() {
-        if (this.onBOL) {
+        if (typeof this.onBOL === "function") {
+            this.onBOL()
+        } else if (this.onBOL) {
             this.onBOL.forEach(listener => listener())
         }
     }
 
     public onBUO() {
-        if (this.onBUOL) {
+        if (typeof this.onBUOL === "function") {
+            this.onBUOL()
+        } else if (this.onBUOL) {
             this.onBUOL.forEach(listener => listener())
         }
     }
