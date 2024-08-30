@@ -34,8 +34,8 @@ export interface IObservable extends IDepTreeNode {
     onBUO(): void
     onBO(): void
 
-    onBUOL: Set<Lambda> | undefined
-    onBOL: Set<Lambda> | undefined
+    onBUOL: Lambda | Set<Lambda> | undefined
+    onBOL: Lambda | Set<Lambda> | undefined
 }
 
 export function hasObservers(observable: IObservable): boolean {

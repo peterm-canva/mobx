@@ -57,18 +57,22 @@ function interceptHook(hook: "onBO" | "onBUO", thing, arg2, arg3) {
     const cb = isFunction(arg3) ? arg3 : arg2
     const listenersKey = `${hook}L` as "onBOL" | "onBUOL"
 
-    if (atom[listenersKey]) {
+    if (typeof atom[listenersKey] === "function") {
+        atom[listenersKey] = new Set<Lambda>([atom[listenersKey], cb])
+    } else if (atom[listenersKey]) {
         atom[listenersKey]!.add(cb)
     } else {
-        atom[listenersKey] = new Set<Lambda>([cb])
+        atom[listenersKey] = cb
     }
 
     return function () {
         const hookListeners = atom[listenersKey]
-        if (hookListeners) {
+        if (typeof hookListeners === "function") {
+            atom[listenersKey] = undefined
+        } else if (hookListeners) {
             hookListeners.delete(cb)
-            if (hookListeners.size === 0) {
-                delete atom[listenersKey]
+            if (hookListeners.size === 1) {
+                atom[listenersKey] = hookListeners.values().next().value
             }
         }
     }
