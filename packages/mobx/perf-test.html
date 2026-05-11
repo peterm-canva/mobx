@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>ScheduledReaction Demo</title>
+        <style>
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+
+            body {
+                font-family: system-ui, -apple-system, sans-serif;
+                background: #0a0a0f;
+                color: #e8e8f0;
+                min-height: 100vh;
+                padding: 48px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+            }
+
+            h1 {
+                font-size: 1.2rem;
+                font-weight: 500;
+                margin-bottom: 16px;
+                color: #888;
+            }
+
+            .subtitle {
+                font-size: 0.85rem;
+                color: #555;
+                margin-bottom: 48px;
+                text-align: center;
+                max-width: 600px;
+                line-height: 1.5;
+            }
+
+            .grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 48px;
+            }
+
+            .panel {
+                text-align: center;
+            }
+
+            .label {
+                font-size: 0.8rem;
+                color: #666;
+                margin-bottom: 16px;
+                text-transform: uppercase;
+                letter-spacing: 0.1em;
+            }
+
+            .action-btn {
+                width: 200px;
+                height: 200px;
+                font-family: inherit;
+                font-size: 1rem;
+                font-weight: 600;
+                border: 2px solid #333;
+                border-radius: 16px;
+                background: #1a1a24;
+                color: #fff;
+                cursor: pointer;
+                transition: transform 0.1s;
+            }
+
+            .action-btn:hover {
+                border-color: #555;
+            }
+
+            .action-btn:active {
+                transform: scale(0.98);
+            }
+
+            .action-btn.active {
+                background: #00ff88;
+                border-color: #00ff88;
+                color: #000;
+                box-shadow: 0 0 60px rgba(0, 255, 136, 0.4);
+            }
+
+            .reset-btn {
+                margin-top: 48px;
+                padding: 12px 24px;
+                font-family: inherit;
+                font-size: 0.85rem;
+                border: 1px solid #333;
+                border-radius: 8px;
+                background: transparent;
+                color: #888;
+                cursor: pointer;
+            }
+
+            .reset-btn:hover {
+                border-color: #555;
+                color: #fff;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Click each button — it should turn green instantly</h1>
+        <p class="subtitle">
+            Each reaction observes a chain of 5 computed values (each depending on the previous).
+            With ScheduledReaction, the entire chain is deferred.
+        </p>
+
+        <div class="grid">
+            <div class="panel">
+                <div class="label">Regular Reaction</div>
+                <button class="action-btn" id="btn1">Click</button>
+            </div>
+
+            <div class="panel">
+                <div class="label">ScheduledReaction</div>
+                <button class="action-btn" id="btn2">Click</button>
+            </div>
+        </div>
+
+        <button class="reset-btn" id="resetBtn">Reset</button>
+
+        <script src="./dist/mobx.umd.development.js"></script>
+        <script>
+            const { observable, computed, Reaction, ScheduledReaction, runInAction } = mobx
+
+            const CHAIN_LENGTH = 5
+            const REACTIONS_PER_CHAIN = 20
+            const COMPUTED_WORK = 5000000
+
+            const state1 = observable({ clickCount: 0 })
+            const state2 = observable({ clickCount: 0 })
+
+            let reactions1 = []
+            let reactions2 = []
+
+            function createNextTaskScheduler() {
+                const pending = new Set()
+                let scheduled = false
+
+                return function (reaction) {
+                    pending.add(reaction)
+                    if (!scheduled) {
+                        scheduled = true
+                        setTimeout(() => {
+                            scheduled = false
+                            const toRun = Array.from(pending)
+                            pending.clear()
+                            for (const r of toRun) {
+                                r.runReaction_()
+                            }
+                        }, 0)
+                    }
+                }
+            }
+
+            const nextTaskScheduler = createNextTaskScheduler()
+
+            function doExpensiveWork(iterations) {
+                let result = 0
+                for (let i = 0; i < iterations; i++) {
+                    result += Math.sqrt(i) * Math.sin(i)
+                }
+                return result
+            }
+
+            // Create a chain of computed values where each depends on the previous
+            function createComputedChain(state) {
+                const chain = []
+
+                // First computed depends on observable
+                chain.push(
+                    computed(() => {
+                        doExpensiveWork(COMPUTED_WORK)
+                        return state.clickCount
+                    })
+                )
+
+                // Each subsequent computed depends on the previous
+                for (let i = 1; i < CHAIN_LENGTH; i++) {
+                    const prev = chain[i - 1]
+                    chain.push(
+                        computed(() => {
+                            doExpensiveWork(COMPUTED_WORK)
+                            return prev.get() * 2
+                        })
+                    )
+                }
+
+                return chain
+            }
+
+            function setup() {
+                reactions1.forEach(r => r.dispose())
+                reactions2.forEach(r => r.dispose())
+                reactions1 = []
+                reactions2 = []
+
+                document.getElementById("btn1").classList.remove("active")
+                document.getElementById("btn2").classList.remove("active")
+
+                runInAction(() => {
+                    state1.clickCount = 0
+                    state2.clickCount = 0
+                })
+
+                // === Regular Reaction with chained computeds ===
+                const primary1 = new Reaction("Primary1", function () {
+                    this.track(() => {
+                        if (state1.clickCount > 0) {
+                            document.getElementById("btn1").classList.add("active")
+                        }
+                    })
+                })
+                primary1.schedule_()
+                reactions1.push(primary1)
+
+                // Create multiple reaction chains
+                for (let r = 0; r < REACTIONS_PER_CHAIN; r++) {
+                    const chain = createComputedChain(state1)
+                    const finalComputed = chain[chain.length - 1]
+
+                    const reaction = new Reaction(`ChainReaction1_${r}`, function () {
+                        this.track(() => void finalComputed.get())
+                    })
+                    reaction.schedule_()
+                    reactions1.push(reaction)
+                }
+
+                // === ScheduledReaction with chained computeds ===
+                const primary2 = new Reaction("Primary2", function () {
+                    this.track(() => {
+                        if (state2.clickCount > 0) {
+                            document.getElementById("btn2").classList.add("active")
+                        }
+                    })
+                })
+                primary2.schedule_()
+                reactions2.push(primary2)
+
+                // Create multiple reaction chains with ScheduledReaction
+                for (let r = 0; r < REACTIONS_PER_CHAIN; r++) {
+                    const chain = createComputedChain(state2)
+                    const finalComputed = chain[chain.length - 1]
+
+                    const reaction = new ScheduledReaction(
+                        `ChainReaction2_${r}`,
+                        function () {
+                            this.track(() => void finalComputed.get())
+                        },
+                        nextTaskScheduler
+                    )
+                    reaction.schedule_()
+                    reactions2.push(reaction)
+                }
+            }
+
+            document.getElementById("btn1").addEventListener("click", () => {
+                if (state1.clickCount > 0) return
+                runInAction(() => state1.clickCount++)
+            })
+
+            document.getElementById("btn2").addEventListener("click", () => {
+                if (state2.clickCount > 0) return
+                runInAction(() => state2.clickCount++)
+            })
+
+            document.getElementById("resetBtn").addEventListener("click", setup)
+
+            setup()
+        </script>
+    </body>
+</html>

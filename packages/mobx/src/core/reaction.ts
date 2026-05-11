@@ -268,6 +268,78 @@ export function onReactionError(handler: (error: any, derivation: IDerivation) =
 }
 
 /**
+ * A scheduler function that receives a ScheduledReaction when it becomes stale.
+ * The scheduler is responsible for deciding when to call `reaction.runReaction_()`.
+ */
+export type ReactionScheduler = (reaction: ScheduledReaction) => void
+
+/**
+ * A ScheduledReaction is a Reaction that uses a custom scheduler instead of
+ * the global `pendingReactions` queue. When this reaction becomes stale,
+ * instead of being added to `globalState.pendingReactions`, it is passed
+ * to the provided scheduler function.
+ *
+ * This allows for custom batching strategies, such as deferring reactions
+ * to the next task (setTimeout(0)) or animation frame (requestAnimationFrame).
+ *
+ * @example
+ * ```ts
+ * const pending: ScheduledReaction[] = []
+ * let scheduled = false
+ *
+ * function nextTaskScheduler(reaction: ScheduledReaction) {
+ *     pending.push(reaction)
+ *     if (!scheduled) {
+ *         scheduled = true
+ *         setTimeout(() => {
+ *             scheduled = false
+ *             const toRun = pending.splice(0)
+ *             toRun.forEach(r => r.runReaction_())
+ *         }, 0)
+ *     }
+ * }
+ *
+ * const reaction = new ScheduledReaction(
+ *     "myReaction",
+ *     function() { this.track(() => console.log(state.value)) },
+ *     nextTaskScheduler
+ * )
+ * reaction.schedule_()
+ * ```
+ *
+ * ## Note
+ *
+ * - Be careful when updating mobx. `runReaction_()` is not a public API and is not guaranteed to be stable.
+ * - Be careful about the guarantees that are lost using a custom scheduler (see `runReactionsHelper`) below for
+ *   some ideas about how to restore them.
+ * - Deferred reactions still cause cascading changes to dependency graph and reactions. That is,
+ *   if a deferred reaction modifies state, it will trigger other reactions that are observing that state.
+ */
+export class ScheduledReaction extends Reaction {
+    constructor(
+        name: string,
+        onInvalidate: () => void,
+        private scheduler_: ReactionScheduler,
+        errorHandler?: (error: any, derivation: IDerivation) => void,
+        requiresObservable?: boolean
+    ) {
+        super(name, onInvalidate, errorHandler, requiresObservable)
+    }
+
+    /**
+     * Override schedule_ to use custom scheduler instead of global pendingReactions queue.
+     * When the reaction becomes stale, the scheduler is called with this reaction.
+     * The scheduler is responsible for calling `runReaction_()` at the appropriate time.
+     */
+    schedule_() {
+        if (!this.isScheduled) {
+            this.isScheduled = true
+            this.scheduler_(this)
+        }
+    }
+}
+
+/**
  * Magic number alert!
  * Defines within how many times a reaction is allowed to re-trigger itself
  * until it is assumed that this is gonna be a never ending loop...
@@ -323,6 +395,8 @@ function runReactionsHelper() {
 }
 
 export const isReaction = createInstanceofPredicate("Reaction", Reaction)
+
+export const isScheduledReaction = createInstanceofPredicate("ScheduledReaction", ScheduledReaction)
 
 export function setReactionScheduler(fn: (f: () => void) => void) {
     const baseScheduler = reactionScheduler

@@ -30,6 +30,8 @@ export {
     IObservable,
     IDepTreeNode,
     Reaction,
+    ScheduledReaction,
+    ReactionScheduler,
     IReactionPublic,
     IReactionDisposer,
     untracked,
