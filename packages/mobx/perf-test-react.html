@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>DeferredObserver – isPending Fast Path Test</title>
+        <style>
+            body {
+                font-family: system-ui, -apple-system, sans-serif;
+                background: #0a0a0f;
+                color: #e8e8f0;
+                padding: 48px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .subtitle {
+                color: #888;
+                margin-bottom: 24px;
+                text-align: center;
+                max-width: 700px;
+            }
+
+            .grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                gap: 48px;
+            }
+
+            .panel {
+                text-align: center;
+                border: 1px solid #333;
+                border-radius: 16px;
+                padding: 24px;
+            }
+
+            .label {
+                font-size: 0.8rem;
+                color: #666;
+                margin-bottom: 16px;
+                text-transform: uppercase;
+            }
+
+            .action-btn {
+                width: 200px;
+                height: 80px;
+                font-size: 1rem;
+                border: 2px solid #333;
+                border-radius: 16px;
+                background: #1a1a24;
+                color: #fff;
+                cursor: pointer;
+            }
+
+            .spinner {
+                width: 40px;
+                height: 40px;
+                border: 4px solid #333;
+                border-top: 4px solid #00ff88;
+                border-radius: 50%;
+                margin: 24px auto;
+            }
+
+            .indicator {
+                margin-top: 6px;
+                font-size: 0.75rem;
+                color: #666;
+            }
+
+            .pending {
+                color: #00ff88;
+                font-weight: bold;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>isPending Fast Path Test</h1>
+        <p class="subtitle">
+            <strong>Theory:</strong> deferredObserverForClass always runs the expensive render even
+            during the urgent isPending=true render. There's no fast path that skips expensive work,
+            so the "deferred" render blocks the main thread just like a sync render.<br /><br />
+            <strong>Column 1:</strong> deferredObserver with isPending fast path (SMOOTH –
+            baseline)<br />
+            <strong>Column 2:</strong> Simulates deferredObserverForClass: always runs expensive
+            render in reaction.track, ignores isPending (FREEZE)<br />
+            <strong>Column 3:</strong> Fixed version: caches previous result, returns stale when
+            isPending (SMOOTH)
+        </p>
+
+        <div class="spinner"></div>
+
+        <div id="root"></div>
+
+        <!-- Dependencies -->
+        <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+        <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+        <script>
+            window.shim = { useSyncExternalStore: React.useSyncExternalStore }
+            window.process = { env: { NODE_ENV: "development" } }
+        </script>
+        <script src="./dist/mobx.umd.development.js"></script>
+        <script src="../mobx-react-lite/dist/mobxreactlite.umd.development.js"></script>
+
+        <script>
+            const { observable, computed, runInAction, Reaction } = mobx
+            const { observer, deferredObserver } = mobxReactLite
+            const e = React.createElement
+
+            const CHAIN_LENGTH = 5
+            const REACTIONS_PER_CHAIN = 25
+            const COMPUTED_WORK = 2_000_000
+
+            function doExpensiveWork(iterations) {
+                let result = 0
+                for (let i = 0; i < iterations; i++) {
+                    result += Math.sqrt(i) * Math.sin(i)
+                }
+                return result
+            }
+
+            class Store {
+                clickCount = 0
+                constructor() {
+                    mobx.makeObservable(this, { clickCount: observable })
+                }
+            }
+
+            const store1 = new Store()
+            const store2 = new Store()
+            const store3 = new Store()
+
+            function createExpensiveChain(store) {
+                let current = computed(() => {
+                    doExpensiveWork(COMPUTED_WORK)
+                    return store.clickCount
+                })
+                for (let i = 1; i < CHAIN_LENGTH; i++) {
+                    const prev = current
+                    current = computed(() => {
+                        doExpensiveWork(COMPUTED_WORK)
+                        return prev.get() * 2
+                    })
+                }
+                return current
+            }
+
+            const chains1 = Array.from({ length: REACTIONS_PER_CHAIN }, () =>
+                createExpensiveChain(store1)
+            )
+            const chains2 = Array.from({ length: REACTIONS_PER_CHAIN }, () =>
+                createExpensiveChain(store2)
+            )
+            const chains3 = Array.from({ length: REACTIONS_PER_CHAIN }, () =>
+                createExpensiveChain(store3)
+            )
+
+            // ============================================================
+            // COLUMN 1: Standard deferredObserver with isPending fast path
+            // The component checks isPending and skips expensive work.
+            // This is the baseline that works.
+            // ============================================================
+
+            const DeferredLeaf = deferredObserver(props => {
+                if (props.isPending) return e("div", { className: "indicator" }, "...")
+                const value = props.chain.get()
+                return e("div", { className: "indicator" }, "v=" + value)
+            })
+
+            const Column1Component = deferredObserver(({ isPending }) => {
+                return e(
+                    "div",
+                    null,
+                    isPending
+                        ? e("div", { className: "pending" }, "isPending=true → fast path!")
+                        : e(
+                              "div",
+                              { className: "indicator" },
+                              "isPending=false → did expensive work"
+                          ),
+                    isPending
+                        ? e("div", { className: "indicator" }, "(skipped expensive leaves)")
+                        : chains1.map((chain, i) => e(DeferredLeaf, { key: i, chain }))
+                )
+            })
+
+            function Column1() {
+                return e(
+                    "div",
+                    { className: "panel" },
+                    e("div", { className: "label" }, "deferredObserver (isPending fast path)"),
+                    e(
+                        "button",
+                        {
+                            className: "action-btn",
+                            onClick: () => runInAction(() => store1.clickCount++)
+                        },
+                        "Click (expect SMOOTH)"
+                    ),
+                    e(Column1Component)
+                )
+            }
+
+            // ============================================================
+            // COLUMN 2: Simulates deferredObserverForClass behavior
+            // Uses useTransition + Reaction, but ALWAYS runs expensive render
+            // inside reaction.track(), even when isPending=true.
+            // This is what deferredObserverForClass currently does.
+            // ============================================================
+
+            function Column2Component() {
+                const [, forceUpdate] = React.useReducer(c => c + 1, 0)
+                const [isPending, startTransition] = React.useTransition()
+                const reactionRef = React.useRef(null)
+
+                if (!reactionRef.current) {
+                    reactionRef.current = new Reaction("col2", () => {
+                        startTransition(() => forceUpdate())
+                    })
+                }
+
+                React.useEffect(() => {
+                    return () => reactionRef.current?.dispose()
+                }, [])
+
+                // ALWAYS run the expensive tracking, even when isPending
+                // This simulates deferredObserverForClass's DeferredUpdateComponent
+                let renderResult
+                reactionRef.current.track(() => {
+                    renderResult = e(
+                        "div",
+                        null,
+                        isPending
+                            ? e(
+                                  "div",
+                                  { className: "pending" },
+                                  "isPending=true but STILL doing expensive work!"
+                              )
+                            : e("div", { className: "indicator" }, "isPending=false"),
+                        chains2.map((chain, i) =>
+                            e("div", { key: i, className: "indicator" }, "v=" + chain.get())
+                        )
+                    )
+                })
+
+                return e(
+                    "div",
+                    null,
+                    e(
+                        "span",
+                        { style: { opacity: isPending ? 0.5 : 1, transition: "opacity 150ms" } },
+                        renderResult
+                    )
+                )
+            }
+
+            function Column2() {
+                return e(
+                    "div",
+                    { className: "panel" },
+                    e("div", { className: "label" }, "Always track (simulates class bug)"),
+                    e(
+                        "button",
+                        {
+                            className: "action-btn",
+                            onClick: () => runInAction(() => store2.clickCount++)
+                        },
+                        "Click (expect FREEZE)"
+                    ),
+                    e(Column2Component)
+                )
+            }
+
+            // ============================================================
+            // COLUMN 3: Fixed version – cache previous result, skip tracking
+            // when isPending=true. Only re-track during the transition render.
+            // ============================================================
+
+            function Column3Component() {
+                const [, forceUpdate] = React.useReducer(c => c + 1, 0)
+                const [isPending, startTransition] = React.useTransition()
+                const reactionRef = React.useRef(null)
+                const cachedResultRef = React.useRef(null)
+
+                if (!reactionRef.current) {
+                    reactionRef.current = new Reaction("col3", () => {
+                        startTransition(() => forceUpdate())
+                    })
+                }
+
+                React.useEffect(() => {
+                    return () => reactionRef.current?.dispose()
+                }, [])
+
+                if (isPending && cachedResultRef.current !== null) {
+                    // FAST PATH: return stale cached result during urgent render
+                    return e(
+                        "div",
+                        null,
+                        e(
+                            "div",
+                            { className: "pending" },
+                            "isPending=true → returning cached (fast!)"
+                        ),
+                        e(
+                            "span",
+                            { style: { opacity: 0.5, transition: "opacity 150ms" } },
+                            cachedResultRef.current
+                        )
+                    )
+                }
+
+                // SLOW PATH: only runs during transition render (or initial mount)
+                let renderResult
+                reactionRef.current.track(() => {
+                    renderResult = e(
+                        "div",
+                        null,
+                        e(
+                            "div",
+                            { className: "indicator" },
+                            "isPending=false → did expensive work"
+                        ),
+                        chains3.map((chain, i) =>
+                            e("div", { key: i, className: "indicator" }, "v=" + chain.get())
+                        )
+                    )
+                })
+                cachedResultRef.current = renderResult
+
+                return e("span", { style: { opacity: 1 } }, renderResult)
+            }
+
+            function Column3() {
+                return e(
+                    "div",
+                    { className: "panel" },
+                    e("div", { className: "label" }, "Cache + skip when isPending (fix)"),
+                    e(
+                        "button",
+                        {
+                            className: "action-btn",
+                            onClick: () => runInAction(() => store3.clickCount++)
+                        },
+                        "Click (expect SMOOTH)"
+                    ),
+                    e(Column3Component)
+                )
+            }
+
+            // ============================================================
+            // App
+            // ============================================================
+
+            function App() {
+                return e("div", { className: "grid" }, e(Column1), e(Column2), e(Column3))
+            }
+
+            const root = ReactDOM.createRoot(document.getElementById("root"))
+            root.render(e(App))
+
+            // JS-driven spinner animation
+            const spinner = document.querySelector(".spinner")
+            let startTime = null
+            function animate(timestamp) {
+                if (!startTime) startTime = timestamp
+                const rotation = ((timestamp - startTime) / 1000) * 360
+                spinner.style.transform = `rotate(${rotation % 360}deg)`
+                requestAnimationFrame(animate)
+            }
+            requestAnimationFrame(animate)
+        </script>
+    </body>
+</html>

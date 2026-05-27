@@ -12,6 +12,8 @@ observerBatching(batch)
 export { isUsingStaticRendering, enableStaticRendering } from "./staticRendering"
 export { observer, IObserverOptions } from "./observer"
 export { Observer } from "./ObserverComponent"
+export { deferredObserver } from "./deferredObserver"
+export { useDeferredObserver } from "./useDeferredObserver"
 export { useLocalObservable } from "./useLocalObservable"
 export { useLocalStore } from "./useLocalStore"
 export { useAsObservableSource } from "./useAsObservableSource"
